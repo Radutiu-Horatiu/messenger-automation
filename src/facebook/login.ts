@@ -19,6 +19,7 @@ import readline from "node:readline";
 import { chromium } from "playwright";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
+import { USER_AGENT } from "./browser.js";
 
 function waitForEnter(prompt: string): Promise<void> {
   const rl = readline.createInterface({
@@ -36,8 +37,24 @@ function waitForEnter(prompt: string): Promise<void> {
 async function main(): Promise<void> {
   logger.info("Launching Chromium for manual login...");
 
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
+  await fs.mkdir(path.dirname(config.storage.storageStatePath), {
+    recursive: true,
+  });
+  await fs.mkdir(config.storage.profileDir, { recursive: true });
+
+  // Use a persistent profile so the same browser state is reused on Railway.
+  const context = await chromium.launchPersistentContext(
+    config.storage.profileDir,
+    {
+      headless: false,
+      userAgent: USER_AGENT,
+      viewport: { width: 1366, height: 900 },
+      locale: "en-US",
+      timezoneId: config.schedule.timezone,
+      args: ["--disable-blink-features=AutomationControlled"],
+    },
+  );
+
   const page = await context.newPage();
 
   await page.goto("https://www.facebook.com/login", {
@@ -52,17 +69,14 @@ async function main(): Promise<void> {
     "\n>>> When you are fully logged in and see your feed, press ENTER here to save the session...\n",
   );
 
-  await fs.mkdir(path.dirname(config.storage.storageStatePath), {
-    recursive: true,
-  });
   await context.storageState({ path: config.storage.storageStatePath });
 
   logger.info(
-    { path: config.storage.storageStatePath },
-    "Storage state saved. Upload this file to your Railway volume (/data).",
+    { path: config.storage.storageStatePath, profileDir: config.storage.profileDir },
+    "Storage state saved. Upload storageState.json and the facebook-profile/ folder to your Railway volume.",
   );
 
-  await browser.close();
+  await context.close();
 }
 
 main().catch((err) => {

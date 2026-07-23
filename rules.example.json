@@ -1,0 +1,14 @@
+[
+  {
+    "group": "https://www.facebook.com/groups/000000000000000",
+    "text": "Weekly Attendance",
+    "matchMode": "includes",
+    "reaction": "like"
+  },
+  {
+    "group": "https://www.facebook.com/groups/111111111111111",
+    "text": "Standup",
+    "matchMode": "exact",
+    "reaction": "love"
+  }
+]

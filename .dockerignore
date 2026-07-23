@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.env
+storageState.json
+reacted.json
+facebook-profile
+data
+*.log

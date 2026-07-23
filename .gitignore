@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+
+# Secrets & session state — NEVER commit
+.env
+storageState.json
+storage/storageState.json
+reacted.json
+facebook-profile/
+data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

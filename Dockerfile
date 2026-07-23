@@ -3,9 +3,9 @@ FROM mcr.microsoft.com/playwright:v1.56.1-jammy
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-
-# Install dependencies first for better layer caching.
+# Install dependencies first for better layer caching. Don't set
+# NODE_ENV=production yet, otherwise npm ci skips TypeScript (devDependency)
+# and `npm run build` will fail with "tsc: not found".
 COPY package*.json ./
 RUN npm ci
 
@@ -17,4 +17,5 @@ RUN npm run build
 # harmless no-op that guarantees the version matches package.json.
 RUN npx playwright install chromium
 
+ENV NODE_ENV=production
 CMD ["npm", "start"]

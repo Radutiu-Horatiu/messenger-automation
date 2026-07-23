@@ -69,8 +69,12 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
     await bubble.waitFor({ state: "visible", timeout: 5_000 });
     await bubble.scrollIntoViewIfNeeded();
 
-    // Hovering the message reveals its action toolbar (React / Reply / More).
-    await bubble.hover();
+    // Reveal the action toolbar (React / Reply / More). A physical hover can
+    // fail when a Facebook overlay subtree intercepts pointer events, so we
+    // dispatch synthetic mouse events on the bubble and let them bubble up to
+    // the message row handlers.
+    await bubble.dispatchEvent("mouseenter");
+    await bubble.dispatchEvent("mouseover", { bubbles: true });
     await page.waitForTimeout(400);
 
     // React trigger: div[role="button"] with aria-haspopup="menu" whose label

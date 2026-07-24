@@ -1,6 +1,8 @@
+import path from "node:path";
 import { type Page, type Locator } from "playwright";
 import { config, type ReactionName } from "../config.js";
 import { logger } from "../services/logger.js";
+import { dismissOverlays } from "./group.js";
 
 /** aria-label shown on each reaction in the hover fly-out bar. */
 const REACTION_ARIA: Record<ReactionName, string> = {
@@ -37,6 +39,54 @@ function snippetOf(text: string): string {
 }
 
 /**
+ * Click a control that a full-screen overlay may be covering. Facebook modals
+ * (cookie consent, promos, e2ee nags — frequent on fresh datacenter IPs)
+ * intercept pointer events, which Playwright reports as "subtree intercepts
+ * pointer events". Dismiss overlays and retry; as a last resort dispatch a
+ * DOM click directly on the element, which bypasses hit-testing entirely.
+ */
+async function clickPastOverlays(page: Page, target: Locator): Promise<void> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await target.click({ timeout: 4_000 });
+      return;
+    } catch (err) {
+      logger.warn(
+        { attempt, err: (err as Error).message.split("\n")[0] },
+        "Click blocked — dismissing overlays and retrying",
+      );
+      await dismissOverlays(page);
+    }
+  }
+  await target.dispatchEvent("click");
+}
+
+/**
+ * Record what the page looked like when a reaction failed on a headless
+ * host: any visible dialog's text plus a screenshot in DATA_DIR, so Railway
+ * logs/volume show exactly which overlay was in the way.
+ */
+async function captureFailureDiagnostics(page: Page): Promise<void> {
+  try {
+    const dialog = page
+      .locator('[role="dialog"]')
+      .filter({ visible: true })
+      .first();
+    if (await dialog.isVisible({ timeout: 500 }).catch(() => false)) {
+      const text = (await dialog.innerText().catch(() => ""))
+        .replace(/\s+/g, " ")
+        .slice(0, 200);
+      logger.warn({ dialog: text }, "A dialog was covering the page");
+    }
+    const shot = path.join(config.storage.dataDir, "reaction-failure.png");
+    await page.screenshot({ path: shot });
+    logger.warn({ screenshot: shot }, "Saved failure screenshot");
+  } catch {
+    // Diagnostics are best-effort.
+  }
+}
+
+/**
  * Locate the article element that contains the given text. Facebook renders
  * each post as a role="article" container; we filter by the matched text.
  */
@@ -69,6 +119,10 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
     await bubble.waitFor({ state: "visible", timeout: 5_000 });
     await bubble.scrollIntoViewIfNeeded();
 
+    // Clear any modal (consent, promo, e2ee nag) BEFORE interacting. These
+    // show up far more often on server IPs and swallow every real click.
+    await dismissOverlays(page);
+
     // Reveal the action toolbar (React / Reply / More). A physical hover can
     // fail when a Facebook overlay subtree intercepts pointer events, so we
     // dispatch synthetic mouse events on the bubble and let them bubble up to
@@ -87,7 +141,7 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
       .filter({ visible: true })
       .first();
     await reactTrigger.waitFor({ state: "visible", timeout: 4_000 });
-    await reactTrigger.click({ timeout: 4_000 });
+    await clickPastOverlays(page, reactTrigger);
 
     // Emoji menu: each reaction is a role="menuitemradio" wrapping
     // <img alt="👍">. The container may be aria-hidden, so target the visible
@@ -99,7 +153,13 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
       .first();
 
     await emojiItem.waitFor({ state: "visible", timeout: 4_000 });
-    await emojiItem.click({ timeout: 4_000 });
+    try {
+      await emojiItem.click({ timeout: 4_000 });
+    } catch {
+      // The menu is open but something still covers it — don't press Escape
+      // (it would close the menu); dispatch the click directly instead.
+      await emojiItem.dispatchEvent("click");
+    }
     logger.info({ reaction, emoji }, "Applied Messenger reaction");
     return true;
   } catch (err) {
@@ -107,6 +167,7 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
       { err: (err as Error).message, reaction },
       "Failed to apply Messenger reaction — selectors may need tuning",
     );
+    await captureFailureDiagnostics(page);
     return false;
   }
 }
@@ -120,6 +181,7 @@ async function reactGroup(page: Page, text: string): Promise<boolean> {
 
   try {
     await article.scrollIntoViewIfNeeded({ timeout: 5_000 });
+    await dismissOverlays(page);
 
     // The toggle button labeled "Like" lives inside each article's footer.
     const likeButton = article
@@ -129,7 +191,7 @@ async function reactGroup(page: Page, text: string): Promise<boolean> {
     await likeButton.waitFor({ state: "visible", timeout: 8_000 });
 
     if (reaction === "like") {
-      await likeButton.click({ timeout: 5_000 });
+      await clickPastOverlays(page, likeButton);
       logger.info("Applied reaction: like");
       return true;
     }
@@ -150,6 +212,7 @@ async function reactGroup(page: Page, text: string): Promise<boolean> {
     return true;
   } catch (err) {
     logger.error({ err, reaction }, "Failed to apply reaction");
+    await captureFailureDiagnostics(page);
     return false;
   }
 }

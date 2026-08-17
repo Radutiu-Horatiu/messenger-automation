@@ -48,6 +48,14 @@ function integer(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** An integer env var that is genuinely optional (null when unset/invalid). */
+function optionalInteger(name: string): number | null {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") return null;
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 const dataDir = optional("DATA_DIR", path.resolve("data"));
 
 const matchModeRaw = optional("MATCH_MODE", "includes").toLowerCase();
@@ -87,6 +95,13 @@ export const config = {
   schedule: {
     startCron: optional("START_CRON", "0 10 * * 0"),
     stopHour: integer("STOP_HOUR", 22),
+    // Only used for one-shot runs (RUN_ONCE / --once). Platform cron
+    // schedulers such as Railway's evaluate expressions in UTC only, so a
+    // fixed UTC trigger drifts by an hour across DST. Set START_HOUR to the
+    // intended LOCAL hour and point the platform cron at the earliest UTC
+    // time it can occur; the process then sleeps until that local hour before
+    // opening the browser. Unset = start immediately.
+    startHour: optionalInteger("START_HOUR"),
     timezone: optional("TZ", "UTC"),
     // End the session as soon as one target message is successfully reacted to.
     // Useful for weekly "wake up, react, go back to sleep" deployments.

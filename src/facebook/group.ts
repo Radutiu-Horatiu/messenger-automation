@@ -3,13 +3,33 @@ import { config } from "../config.js";
 import { logger } from "../services/logger.js";
 import { notify } from "../services/discord.js";
 
-/** Heuristics that indicate we've been bounced to a login/checkpoint page. */
-function looksLoggedOut(url: string): boolean {
-  return (
-    url.includes("/login") ||
-    url.includes("login.php") ||
-    url.includes("/checkpoint")
-  );
+/**
+ * Decide whether Facebook is refusing this session, returning a human-readable
+ * reason or null when we look logged in.
+ *
+ * URL heuristics catch the outright redirects. The visible password field
+ * catches the "we still remember your account, prove it's you" screen, which
+ * Facebook can render without any of the tell-tale URLs — that one previously
+ * read as a valid session and failed later with a confusing selector error.
+ */
+export async function detectLoggedOut(page: Page): Promise<string | null> {
+  const url = page.url();
+  if (url.includes("/login") || url.includes("login.php")) {
+    return `redirected to the login page (${url})`;
+  }
+  if (url.includes("/checkpoint")) {
+    return `hit a security checkpoint (${url})`;
+  }
+
+  const passwordField = page
+    .locator('input[type="password"]')
+    .filter({ visible: true })
+    .first();
+  if (await passwordField.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    return "Facebook is asking for the account password (session no longer trusted)";
+  }
+
+  return null;
 }
 
 /**
@@ -27,10 +47,13 @@ export async function openGroup(context: BrowserContext): Promise<Page> {
 
   // Give the SPA a moment to settle, then verify we weren't redirected.
   await page.waitForTimeout(4_000);
-  const currentUrl = page.url();
-  if (looksLoggedOut(currentUrl)) {
-    await notify("error", "Facebook session expired — please re-login locally.");
-    throw new Error(`Session expired; redirected to ${currentUrl}`);
+  const loggedOutReason = await detectLoggedOut(page);
+  if (loggedOutReason) {
+    await notify(
+      "error",
+      `Facebook session expired — ${loggedOutReason}. Run \`npm run login\` locally and update FB_STORAGE_STATE_B64.`,
+    );
+    throw new Error(`Session expired; ${loggedOutReason}`);
   }
 
   await dismissOverlays(page);

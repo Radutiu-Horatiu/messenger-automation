@@ -14,6 +14,7 @@ import { config } from "../config.js";
 import { logger } from "../services/logger.js";
 import { notify } from "../services/discord.js";
 import { launchContext } from "./browser.js";
+import { detectLoggedOut } from "./group.js";
 
 /** Cookies that actually carry the login. Everything else is noise. */
 const AUTH_COOKIES = ["c_user", "xs"];
@@ -73,23 +74,18 @@ async function main(): Promise<void> {
     });
     await page.waitForTimeout(4_000);
 
-    const url = page.url();
-    const loggedOut =
-      url.includes("/login") ||
-      url.includes("login.php") ||
-      url.includes("/checkpoint");
-
-    if (loggedOut) {
-      logger.error({ url }, "SESSION INVALID — Facebook redirected to login/checkpoint");
-      await notify(
-        "error",
-        "Facebook session is INVALID — run `npm run login` locally and re-upload storageState.json.",
+    const reason = await detectLoggedOut(page);
+    if (reason) {
+      logger.error({ url: page.url(), reason }, "SESSION INVALID");
+      logger.error(
+        "Fix: run `npm run login`, then paste data/storageState.b64.txt into FB_STORAGE_STATE_B64 and redeploy.",
       );
+      await notify("error", `Facebook session is INVALID — ${reason}.`);
       process.exitCode = 1;
       return;
     }
 
-    logger.info({ url }, "SESSION VALID — still logged in");
+    logger.info({ url: page.url() }, "SESSION VALID — still logged in");
   } finally {
     // Deliberately no saveStorageState() here: a check must never be able to
     // overwrite good cookies with whatever this probe happened to produce.

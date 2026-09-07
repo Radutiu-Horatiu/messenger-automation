@@ -126,8 +126,24 @@ already on screen when the observer attaches are marked seen and ignored. Watch
 
 ## Session cookies
 
-`storageState.json` and `facebook-profile/` are produced locally by
-`npm run login` and uploaded to the volume. Never commit them.
+Session cookies come from a real browser login on your own machine. They are
+credentials — never commit them, and treat the base64 blob below as a password.
+
+### Re-login (when the session dies)
+
+1. `npm run login` — a browser opens; log in, tick **Remember me**, clear any
+   2FA, and land on your normal feed. Press ENTER in the terminal.
+2. Open `data/storageState.b64.txt` and copy the whole line.
+3. Paste it into the **`FB_STORAGE_STATE_B64`** variable on Railway, redeploy.
+
+The app writes that blob to `storageState.json` on boot whenever the variable
+differs from the one it last imported, so you never have to get a file onto the
+volume by hand. Because it fingerprints what it imported, a variable that is
+merely still-set will not overwrite the fresher cookies that healthy runs write
+back — only an actually-new paste wins.
+
+Keeping the volume is still worth it: the Chromium profile there is what makes
+you look like the same device each week.
 
 ### Checking them
 

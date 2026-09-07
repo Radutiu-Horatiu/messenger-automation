@@ -121,6 +121,13 @@ export const config = {
     ),
     profileDir: optional("PROFILE_DIR", path.join(dataDir, "facebook-profile")),
     reactedDbPath: optional("REACTED_DB_PATH", path.join(dataDir, "reacted.json")),
+    // Base64 of a storageState.json, for hosts where dropping a file onto a
+    // volume is awkward. Treated as a fresh push: whenever its content differs
+    // from the last one imported, it overwrites the file on disk. Otherwise
+    // the on-disk copy wins, because healthy runs keep refreshing it.
+    storageStateB64: optional("FB_STORAGE_STATE_B64", ""),
+    // Records which FB_STORAGE_STATE_B64 value we last imported.
+    storageStateSourcePath: path.join(dataDir, ".storage-state-source"),
   },
   browser: {
     headless: boolean("HEADLESS", true),

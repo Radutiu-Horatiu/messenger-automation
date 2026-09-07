@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium, type BrowserContext } from "playwright";
@@ -24,7 +25,49 @@ async function fileExists(p: string): Promise<boolean> {
  * storageState option, so we inject cookies manually. The persistent
  * profile then keeps the session warm across redeployments.
  */
+/**
+ * Materialize storageState.json from FB_STORAGE_STATE_B64 when that variable
+ * carries something we have not imported yet.
+ *
+ * Re-login is the one part of this system that cannot be automated, so the
+ * step after it should be as cheap as possible: paste the new blob into the
+ * host's variables instead of shipping a file to a volume. We fingerprint what
+ * we import so a value that is merely still-set does not keep overwriting the
+ * fresher cookies that healthy runs write back to disk.
+ */
+export async function importStorageStateFromEnv(): Promise<void> {
+  const b64 = config.storage.storageStateB64;
+  if (!b64) return;
+
+  const fingerprint = createHash("sha256").update(b64).digest("hex");
+  const sourcePath = config.storage.storageStateSourcePath;
+  const previous = await fs.readFile(sourcePath, "utf8").catch(() => "");
+
+  if (previous.trim() === fingerprint) {
+    logger.debug("FB_STORAGE_STATE_B64 already imported — keeping the copy on disk");
+    return;
+  }
+
+  try {
+    const json = Buffer.from(b64, "base64").toString("utf8");
+    JSON.parse(json); // fail loudly here rather than at addCookies time
+    await fs.writeFile(config.storage.storageStatePath, json, "utf8");
+    await fs.writeFile(sourcePath, fingerprint, "utf8");
+    logger.info(
+      { statePath: config.storage.storageStatePath },
+      "Imported a new session from FB_STORAGE_STATE_B64",
+    );
+  } catch (err) {
+    logger.error(
+      { err },
+      "FB_STORAGE_STATE_B64 is not valid base64-encoded JSON — ignoring it",
+    );
+  }
+}
+
 async function applyStorageState(context: BrowserContext): Promise<void> {
+  await importStorageStateFromEnv();
+
   const statePath = config.storage.storageStatePath;
   if (!(await fileExists(statePath))) {
     logger.warn(

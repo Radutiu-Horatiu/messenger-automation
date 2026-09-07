@@ -71,9 +71,20 @@ async function main(): Promise<void> {
 
   await context.storageState({ path: config.storage.storageStatePath });
 
+  // Also emit a base64 blob. Pasting one variable into the host beats getting
+  // a file onto a persistent volume, and this is a step you have to repeat
+  // every time Facebook invalidates the session.
+  const json = await fs.readFile(config.storage.storageStatePath, "utf8");
+  const b64Path = path.join(config.storage.dataDir, "storageState.b64.txt");
+  await fs.writeFile(b64Path, Buffer.from(json, "utf8").toString("base64"), "utf8");
+
   logger.info(
     { path: config.storage.storageStatePath, profileDir: config.storage.profileDir },
-    "Storage state saved. Upload storageState.json and the facebook-profile/ folder to your Railway volume.",
+    "Storage state saved.",
+  );
+  logger.info(
+    { b64Path },
+    "Copy the contents of this file into the FB_STORAGE_STATE_B64 variable on your host, then redeploy.",
   );
 
   await context.close();

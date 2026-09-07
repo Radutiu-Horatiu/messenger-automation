@@ -3,6 +3,15 @@
 Two supported shapes on Railway. Both react identically; they differ only in
 what you pay for between Sundays.
 
+> **There are two schedulers and you must use exactly one.** `START_CRON` runs
+> `node-cron` *inside* a permanently running process; Railway's **Cron Schedule**
+> field starts the container *from outside* and expects it to exit. Setting both
+> is the one combination that silently fails: Railway launches the container on
+> its schedule, the in-process scheduler keeps it alive forever, and Railway then
+> skips every later trigger because the previous run never finished. It fires
+> once and appears dead thereafter. `RUN_ONCE=true` is what switches the app
+> from the first shape to the second.
+
 ## A. Always-on service (simplest)
 
 The container runs 24/7 and an in-process `node-cron` fires the session.
@@ -68,33 +77,52 @@ hour of idling costs almost nothing.
   session cookies, Chromium profile, dedupe DB, and failure screenshots all
   live there; losing it makes Facebook treat every run as a new device.
 
-## C. Fast test loop
+## C. Fast test loop (on Railway's cron)
 
-To exercise the whole fire -> detect -> react -> close cycle against a throwaway
-Messenger conversation, without waiting a week between attempts.
+Exercises the whole start -> detect -> react -> exit cycle against a throwaway
+conversation, on the same machinery production will use. Railway's minimum
+interval is 5 minutes, which is exactly the cadence we want.
+
+Service settings:
+
+- **Cron Schedule** -> `*/5 * * * *`
+- **Restart Policy** -> `Never`
 
 | Variable | Value | Why |
 | --- | --- | --- |
 | `FB_GROUP_URL` | *your test conversation* | |
-| `START_CRON` | `*/5 * * * *` | fire every 5 minutes, every day |
-| `MAX_SESSION_MIN` | `4` | **required** — see below |
-| `EXIT_AFTER_REACT` | `true` | close as soon as it reacts |
-| `REACT_TO_EXISTING` | `false` | only react to messages you send *during* a window |
+| `RUN_ONCE` | `true` | **required** — without it the process never exits |
+| `MAX_SESSION_MIN` | `3` | **required** — see below |
+| `START_HOUR` | *unset* | **required** — see below |
+| `EXIT_AFTER_REACT` | `true` | exit as soon as it reacts |
+| `START_CRON` | *unset* | Railway drives the schedule now |
+| `REACT_TO_EXISTING` | `false` | only react to messages sent *during* a window |
 | `LOG_LEVEL` | `debug` | |
 | `VERBOSE` | `true` | forwards the in-page observer diagnostics |
-| `RUN_ONCE` / `START_HOUR` | *unset* | those belong to mode B only |
 
-`MAX_SESSION_MIN` is not optional here. A session normally holds the slot until
-`STOP_HOUR`, and `guardedRun()` skips any trigger that arrives while one is
-still running — so without a cap the first tick would start a session lasting
-until 22:00 and every later tick would be silently skipped. Capping at 4 minutes
-leaves a one-minute gap before the next tick.
+Two settings are load-bearing and easy to get wrong:
 
-Post `Marti?` in the test conversation *after* a session has started; messages
-already on screen when the observer attaches are marked seen and ignored.
+- **`MAX_SESSION_MIN=3`.** A run that finds no target message would otherwise
+  stay open until `STOP_HOUR`, and Railway skips any trigger that arrives while
+  the previous run is alive — so you would get one run and then silence. Three
+  minutes of watching plus ~30-60s of container and browser startup fits inside
+  the 5-minute window with room to spare.
+- **`START_HOUR` must be unset.** If it is left at `10`, every run started
+  before 10:00 local sleeps until 10:00 instead of watching, and holds the slot
+  while it does. It exists only to correct for UTC drift on the weekly schedule.
 
-**On Railway, leave the Cron Schedule field empty for this mode.** It is
-`node-cron` inside the always-on process that drives the schedule here.
+Post `Marti?` in the test conversation *after* a run has started; messages
+already on screen when the observer attaches are marked seen and ignored. Watch
+**Cron Runs** in Railway for the trigger history, and the deploy logs for
+`Target message detected` / `Applied Messenger reaction`.
+
+### Switching back to production
+
+- **Cron Schedule** -> `0 7 * * 0`
+- `FB_GROUP_URL` -> the real conversation
+- `START_HOUR` -> `10`
+- remove `MAX_SESSION_MIN`, `VERBOSE`, and `LOG_LEVEL=debug`
+- leave `RUN_ONCE=true` and `EXIT_AFTER_REACT=true` as they are
 
 ## Session cookies
 

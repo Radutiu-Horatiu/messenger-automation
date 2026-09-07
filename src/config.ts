@@ -102,6 +102,12 @@ export const config = {
     // time it can occur; the process then sleeps until that local hour before
     // opening the browser. Unset = start immediately.
     startHour: optionalInteger("START_HOUR"),
+    // Hard cap on how long a single session may stay open, regardless of
+    // STOP_HOUR. Mainly a testing lever: with a fast START_CRON, a session
+    // that finds no target message would otherwise hold the slot until
+    // STOP_HOUR and every later trigger would be skipped as "already
+    // running". Unset = bounded only by STOP_HOUR.
+    maxSessionMin: optionalInteger("MAX_SESSION_MIN"),
     timezone: optional("TZ", "UTC"),
     // End the session as soon as one target message is successfully reacted to.
     // Useful for weekly "wake up, react, go back to sleep" deployments.

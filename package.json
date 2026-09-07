@@ -13,6 +13,7 @@
     "dev": "tsx src/index.ts",
     "run:once": "tsx src/index.ts --once",
     "login": "tsx src/facebook/login.ts",
+    "check:session": "tsx src/facebook/check-session.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

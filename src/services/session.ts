@@ -71,9 +71,12 @@ export async function runSession(exitAfterReact = false): Promise<void> {
 
   const context = await launchContext();
   let stopKeepAlive: (() => void) | null = null;
+  // Set once we have confirmed a logged-in page; gates the cookie write-back.
+  let sessionHealthy = false;
 
   try {
     const page = await openGroup(context);
+    sessionHealthy = true;
 
     // Forward browser-side console + page errors into our logs so we can see
     // exactly what the injected observer is doing.
@@ -150,10 +153,20 @@ export async function runSession(exitAfterReact = false): Promise<void> {
     await attachObserver(page, handlePost);
     stopKeepAlive = startKeepAlive(page, config.browser.keepAliveIntervalMin);
 
-    const waitMs = msUntilLocalHour(config.schedule.stopHour, "tomorrow");
+    const stopHourMs = msUntilLocalHour(config.schedule.stopHour, "tomorrow");
+    const { maxSessionMin } = config.schedule;
+    const waitMs =
+      maxSessionMin === null
+        ? stopHourMs
+        : Math.min(stopHourMs, maxSessionMin * 60_000);
     logger.info(
-      { stopHour: config.schedule.stopHour, waitMinutes: Math.round(waitMs / 60000) },
-      "Session running until stop hour",
+      {
+        stopHour: config.schedule.stopHour,
+        maxSessionMin,
+        waitMinutes: Math.round(waitMs / 60000),
+        boundedBy: waitMs < stopHourMs ? "MAX_SESSION_MIN" : "STOP_HOUR",
+      },
+      "Session running",
     );
 
     if (exitAfterReact) {
@@ -184,7 +197,18 @@ export async function runSession(exitAfterReact = false): Promise<void> {
   } finally {
     stopKeepAlive?.();
     logger.info("Stopping — closing browser");
-    await saveStorageState(context).catch(() => undefined);
+    // Only persist cookies from a session we know was logged in. If openGroup
+    // threw because Facebook bounced us to a login/checkpoint page, the
+    // context now holds logged-out cookies, and writing those would overwrite
+    // the last known-good storageState.json — turning a recoverable blip into
+    // a mandatory manual re-login.
+    if (sessionHealthy) {
+      await saveStorageState(context).catch(() => undefined);
+    } else {
+      logger.warn(
+        "Session was not healthy — keeping the previous storageState.json instead of overwriting it",
+      );
+    }
     await context.close().catch(() => undefined);
     await notify("info", "Bot session stopped.");
   }

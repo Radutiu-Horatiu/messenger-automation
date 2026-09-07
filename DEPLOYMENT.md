@@ -68,7 +68,66 @@ hour of idling costs almost nothing.
   session cookies, Chromium profile, dedupe DB, and failure screenshots all
   live there; losing it makes Facebook treat every run as a new device.
 
+## C. Fast test loop
+
+To exercise the whole fire -> detect -> react -> close cycle against a throwaway
+Messenger conversation, without waiting a week between attempts.
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `FB_GROUP_URL` | *your test conversation* | |
+| `START_CRON` | `*/5 * * * *` | fire every 5 minutes, every day |
+| `MAX_SESSION_MIN` | `4` | **required** — see below |
+| `EXIT_AFTER_REACT` | `true` | close as soon as it reacts |
+| `REACT_TO_EXISTING` | `false` | only react to messages you send *during* a window |
+| `LOG_LEVEL` | `debug` | |
+| `VERBOSE` | `true` | forwards the in-page observer diagnostics |
+| `RUN_ONCE` / `START_HOUR` | *unset* | those belong to mode B only |
+
+`MAX_SESSION_MIN` is not optional here. A session normally holds the slot until
+`STOP_HOUR`, and `guardedRun()` skips any trigger that arrives while one is
+still running — so without a cap the first tick would start a session lasting
+until 22:00 and every later tick would be silently skipped. Capping at 4 minutes
+leaves a one-minute gap before the next tick.
+
+Post `Marti?` in the test conversation *after* a session has started; messages
+already on screen when the observer attaches are marked seen and ignored.
+
+**On Railway, leave the Cron Schedule field empty for this mode.** It is
+`node-cron` inside the always-on process that drives the schedule here.
+
 ## Session cookies
 
 `storageState.json` and `facebook-profile/` are produced locally by
 `npm run login` and uploaded to the volume. Never commit them.
+
+### Checking them
+
+    npm run check:session
+
+Prints the real expiry of the `c_user` and `xs` cookies, loads a logged-in page
+to confirm Facebook still accepts them, and exits non-zero (plus a Discord
+notification) if it is dead. It never writes cookies back, so it is safe to run
+against the live data dir at any time.
+
+### Keeping them alive
+
+There is no refresh-token flow to automate. What renews the session is simply
+using it: every healthy run writes the freshest cookies back to
+`storageState.json`, so a weekly run keeps them rolling on its own.
+
+What breaks a session is server-side invalidation — a password change, "log out
+of all devices", 2FA re-challenge, or Facebook deciding the login looks
+suspicious. Running from a datacenter IP makes that last one much more likely,
+so:
+
+- Keep the volume. A stable Chromium profile means a stable device fingerprint;
+  losing it makes every run look like a brand-new device.
+- Log in with "Remember me" so `xs` is a persistent cookie. `check:session`
+  warns if it is a session cookie, which would not survive a restart.
+- Prefer a Railway region near you, so the login location does not jump
+  continents between the manual login and the scheduled run.
+
+When a session *is* genuinely dead, re-login is manual and cannot be
+automated — it may require 2FA. Run `npm run login` locally, then upload the
+new `storageState.json` to the volume.

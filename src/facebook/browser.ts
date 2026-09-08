@@ -94,7 +94,15 @@ async function applyStorageState(context: BrowserContext): Promise<void> {
   }
 }
 
-export async function launchContext(): Promise<BrowserContext> {
+/**
+ * @param applyStoredCookies - when false, the persistent profile is opened
+ *   exactly as it sits on disk. Exporting a session must not first inject the
+ *   cookies from an older storageState.json, or addCookies would overwrite the
+ *   fresher profile cookies and we would export the stale ones straight back.
+ */
+export async function launchContext(
+  { applyStoredCookies = true }: { applyStoredCookies?: boolean } = {},
+): Promise<BrowserContext> {
   await fs.mkdir(config.storage.profileDir, { recursive: true });
   await fs.mkdir(path.dirname(config.storage.storageStatePath), {
     recursive: true,
@@ -129,7 +137,7 @@ export async function launchContext(): Promise<BrowserContext> {
     "window.__name = window.__name || function (f) { return f; };",
   );
 
-  await applyStorageState(context);
+  if (applyStoredCookies) await applyStorageState(context);
   return context;
 }
 

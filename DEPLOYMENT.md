@@ -132,9 +132,17 @@ credentials — never commit them, and treat the base64 blob below as a password
 ### Re-login (when the session dies)
 
 1. `npm run login` — a browser opens; log in, tick **Remember me**, clear any
-   2FA, and land on your normal feed. Press ENTER in the terminal.
-2. Open `data/storageState.b64.txt` and copy the whole line.
-3. Paste it into the **`FB_STORAGE_STATE_B64`** variable on Railway, redeploy.
+   2FA, and land on your normal feed. Then **press ENTER in the terminal**.
+   Closing the browser window instead skips the export: you end up logged in
+   inside `data/facebook-profile/` while `storageState.json` still holds the
+   old session, which looks fine locally and fails on the host.
+2. `npm run save:session` — exports whatever the profile is holding, checks the
+   result authenticates in a clean browser with no profile behind it, and only
+   then replaces `storageState.json` and writes `data/storageState.b64.txt`.
+   Run this on its own if you hit the trap in step 1; it recovers the session
+   without logging in again.
+3. Copy the whole line from `data/storageState.b64.txt` into the
+   **`FB_STORAGE_STATE_B64`** variable on Railway, then redeploy.
 
 The app writes that blob to `storageState.json` on boot whenever the variable
 differs from the one it last imported, so you never have to get a file onto the
@@ -173,5 +181,4 @@ so:
   continents between the manual login and the scheduled run.
 
 When a session *is* genuinely dead, re-login is manual and cannot be
-automated — it may require 2FA. Run `npm run login` locally, then upload the
-new `storageState.json` to the volume.
+automated — it may require 2FA. Follow the re-login steps above.

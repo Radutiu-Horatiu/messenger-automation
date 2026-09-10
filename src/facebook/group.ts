@@ -1,16 +1,14 @@
 import { type BrowserContext, type Page } from "playwright";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
-import { notify } from "../services/discord.js";
 
 /**
  * Decide whether Facebook is refusing this session, returning a human-readable
  * reason or null when we look logged in.
  *
- * URL heuristics catch the outright redirects. The visible password field
- * catches the "we still remember your account, prove it's you" screen, which
- * Facebook can render without any of the tell-tale URLs — that one previously
- * read as a valid session and failed later with a confusing selector error.
+ * URL heuristics catch the outright redirects — a logged-out browser is sent
+ * to /login/. The password check catches the "we still remember your account,
+ * prove it's you" screen, which can render without a tell-tale URL.
  */
 export async function detectLoggedOut(page: Page): Promise<string | null> {
   const url = page.url();
@@ -21,11 +19,17 @@ export async function detectLoggedOut(page: Page): Promise<string | null> {
     return `hit a security checkpoint (${url})`;
   }
 
-  const passwordField = page
-    .locator('input[type="password"]')
+  // Facebook's login form names its password field "pass" (checked against
+  // the live page). Match on that, not on any password input: Messenger shows
+  // its own PIN prompt for restoring end-to-end-encrypted chat history on
+  // unfamiliar devices — and a fresh Railway container is exactly that. Taking
+  // the PIN prompt for a logout kills every run on the host while everything
+  // works locally, where the device is already known.
+  const loginPassword = page
+    .locator('input[type="password"][name="pass"]')
     .filter({ visible: true })
     .first();
-  if (await passwordField.isVisible({ timeout: 1_000 }).catch(() => false)) {
+  if (await loginPassword.isVisible({ timeout: 1_000 }).catch(() => false)) {
     return "Facebook is asking for the account password (session no longer trusted)";
   }
 
@@ -49,16 +53,40 @@ export async function openGroup(context: BrowserContext): Promise<Page> {
   await page.waitForTimeout(4_000);
   const loggedOutReason = await detectLoggedOut(page);
   if (loggedOutReason) {
-    await notify(
-      "error",
-      `Facebook session expired — ${loggedOutReason}. Run \`npm run login\` locally and update FB_STORAGE_STATE_B64.`,
+    await logPageState(page);
+    throw new Error(`Facebook rejected the session — ${loggedOutReason}`);
+  }
+
+  const otherSecretField = page
+    .locator('input[type="password"]:not([name="pass"])')
+    .filter({ visible: true })
+    .first();
+  if (await otherSecretField.isVisible({ timeout: 500 }).catch(() => false)) {
+    logger.info(
+      "A PIN/password prompt is on screen but it is not Facebook's login form — most likely Messenger's chat-history PIN. Not a logout; dismissing it.",
     );
-    throw new Error(`Session expired; ${loggedOutReason}`);
   }
 
   await dismissOverlays(page);
   logger.info("Group feed is open and session looks valid");
   return page;
+}
+
+/**
+ * Log what Facebook actually put on screen. On the host there is no window to
+ * look at, so this line is the only way to tell a real logout from a
+ * checkpoint or an unexpected dialog.
+ */
+async function logPageState(page: Page): Promise<void> {
+  const title = await page.title().catch(() => "");
+  const dialog = page.locator('[role="dialog"]').filter({ visible: true }).first();
+  const dialogText = (await dialog.isVisible({ timeout: 500 }).catch(() => false))
+    ? (await dialog.innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 200)
+    : null;
+  logger.warn(
+    { url: page.url(), title, dialog: dialogText },
+    "Page state when the session was rejected",
+  );
 }
 
 /**

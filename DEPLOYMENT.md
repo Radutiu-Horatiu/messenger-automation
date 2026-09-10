@@ -124,6 +124,29 @@ already on screen when the observer attaches are marked seen and ignored. Watch
 - remove `MAX_SESSION_MIN`, `VERBOSE`, and `LOG_LEVEL=debug`
 - leave `RUN_ONCE=true` and `EXIT_AFTER_REACT=true` as they are
 
+## Reading a run
+
+Every run fixes its end time up front (`Session starting … endsAt`) and spends
+that whole window trying: if the conversation will not open it retries with
+backoff (30s, 60s, 2m, … capped at 15m) instead of quitting, and once it is
+open it listens until a reaction succeeds or `endsAt` arrives. A failed
+reaction does not end the run either — it keeps listening for the next match.
+
+When the conversation will not open, each attempt logs
+`Could not open the conversation: …` with the reason, followed by the URL, page
+title and any visible dialog. What to do about each:
+
+| Reason in the log | Meaning | Fix |
+| --- | --- | --- |
+| `redirected to the login page` | Facebook no longer accepts the cookies | Re-login (below) |
+| `asking for the account password` | Account remembered, session not trusted | Re-login (below) |
+| `hit a security checkpoint` | Facebook wants to confirm it is you | Approve the "was this you?" prompt on your phone or desktop — the next retry picks it up |
+| `Timeout … exceeded` | Facebook was slow to load | Nothing; the retries absorb it |
+
+A line saying a PIN/password prompt is on screen *but is not Facebook's login
+form* is Messenger's chat-history PIN, not a logout. The run dismisses it and
+carries on.
+
 ## Session cookies
 
 Session cookies come from a real browser login on your own machine. They are
@@ -158,8 +181,7 @@ you look like the same device each week.
     npm run check:session
 
 Prints the real expiry of the `c_user` and `xs` cookies, loads a logged-in page
-to confirm Facebook still accepts them, and exits non-zero (plus a Discord
-notification) if it is dead. It never writes cookies back, so it is safe to run
+to confirm Facebook still accepts them, and exits non-zero if it is dead. It never writes cookies back, so it is safe to run
 against the live data dir at any time.
 
 ### Keeping them alive

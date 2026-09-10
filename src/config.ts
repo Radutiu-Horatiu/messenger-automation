@@ -133,9 +133,6 @@ export const config = {
     headless: boolean("HEADLESS", true),
     keepAliveIntervalMin: integer("KEEPALIVE_INTERVAL_MIN", 3),
   },
-  notifications: {
-    discordWebhookUrl: optional("DISCORD_WEBHOOK_URL", ""),
-  },
   logging: {
     level: optional("LOG_LEVEL", "info"),
   },

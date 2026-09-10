@@ -72,7 +72,7 @@ async function applyStorageState(context: BrowserContext): Promise<void> {
   if (!(await fileExists(statePath))) {
     logger.warn(
       { statePath },
-      "No storageState.json found. If this is the first run, log in locally and upload it.",
+      "No storageState.json found — run `npm run login` locally and set FB_STORAGE_STATE_B64 from data/storageState.b64.txt.",
     );
     return;
   }

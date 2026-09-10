@@ -1,6 +1,6 @@
+import { type BrowserContext, type Page } from "playwright";
 import { config } from "../config.js";
 import { logger } from "./logger.js";
-import { notify } from "./discord.js";
 import { matchesTarget } from "./matcher.js";
 import { launchContext, saveStorageState } from "../facebook/browser.js";
 import { openGroup } from "../facebook/group.js";
@@ -58,16 +58,83 @@ export async function waitUntilStartHour(): Promise<void> {
 }
 
 /**
- * Run one full daily session:
- *  - launch persistent browser
- *  - open the group and verify the session
- *  - attach the MutationObserver
- *  - react to matching posts (deduped)
- *  - keep the tab warm until STOP_HOUR, then shut down
+ * How long a session may run: until STOP_HOUR, or for MAX_SESSION_MIN if that
+ * comes first.
+ */
+function sessionBudgetMs(): number {
+  const stopHourMs = msUntilLocalHour(config.schedule.stopHour, "tomorrow");
+  const { maxSessionMin } = config.schedule;
+  return maxSessionMin === null
+    ? stopHourMs
+    : Math.min(stopHourMs, maxSessionMin * 60_000);
+}
+
+/** First wait after a failed page-open; doubles each time up to the cap. */
+const OPEN_RETRY_INITIAL_MS = 30_000;
+const OPEN_RETRY_MAX_MS = 15 * 60_000;
+/** Roughly what one open attempt costs: navigation, settle time, checks. */
+const OPEN_ATTEMPT_MS = 20_000;
+
+/**
+ * Open the conversation, retrying until it works or the session window runs
+ * out. Returns null when time is up.
+ *
+ * A single failed open used to end the whole run, so one slow load, stray
+ * redirect or security checkpoint forfeited the day. Retrying also gives a
+ * checkpoint the chance to clear: approving Facebook's "was this you?" prompt
+ * on your phone lets the next attempt through. The backoff stops a session
+ * that is genuinely dead from reloading Facebook every few seconds from a
+ * datacenter IP, which would only deepen Facebook's suspicion.
+ */
+async function openGroupUntil(
+  context: BrowserContext,
+  deadline: number,
+): Promise<Page | null> {
+  let delayMs = OPEN_RETRY_INITIAL_MS;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await openGroup(context);
+    } catch (err) {
+      const remainingMs = deadline - Date.now();
+      const canRetry = remainingMs > delayMs + OPEN_ATTEMPT_MS;
+      logger.warn(
+        {
+          attempt,
+          retryInSec: canRetry ? Math.round(delayMs / 1000) : null,
+          secondsLeft: Math.round(remainingMs / 1000),
+        },
+        `Could not open the conversation: ${(err as Error).message.split("\n")[0]}`,
+      );
+      if (!canRetry) return null;
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      delayMs = Math.min(delayMs * 2, OPEN_RETRY_MAX_MS);
+    }
+  }
+}
+
+/**
+ * Run one session:
+ *  - launch the persistent browser
+ *  - open the conversation, retrying until it opens or time runs out
+ *  - attach the MutationObserver and react to matching messages
+ *  - keep listening until a reaction succeeds (when exitAfterReact) or the
+ *    window closes, then shut down
  */
 export async function runSession(exitAfterReact = false): Promise<void> {
-  logger.info("Browser started");
-  await notify("info", "Bot session started — watching group.");
+  // The window closes at one fixed moment, decided up front, so retries and
+  // listening draw on a single budget: however the time gets spent, a run
+  // never outlives MAX_SESSION_MIN / STOP_HOUR.
+  const deadline = Date.now() + sessionBudgetMs();
+  logger.info(
+    {
+      endsAt: new Date(deadline).toLocaleTimeString("en-GB", {
+        timeZone: config.schedule.timezone,
+      }),
+      stopHour: config.schedule.stopHour,
+      maxSessionMin: config.schedule.maxSessionMin,
+    },
+    "Session starting",
+  );
 
   const context = await launchContext();
   let stopKeepAlive: (() => void) | null = null;
@@ -75,7 +142,13 @@ export async function runSession(exitAfterReact = false): Promise<void> {
   let sessionHealthy = false;
 
   try {
-    const page = await openGroup(context);
+    const page = await openGroupUntil(context, deadline);
+    if (!page) {
+      logger.error(
+        "Gave up: the conversation never opened before the session window closed — the attempts above say why",
+      );
+      return;
+    }
     sessionHealthy = true;
 
     // Forward browser-side console + page errors into our logs so we can see
@@ -119,16 +192,15 @@ export async function runSession(exitAfterReact = false): Promise<void> {
         await markReacted(post.id);
         await saveStorageState(context);
         logger.info({ postId: post.id }, "Reaction successful");
-        await notify(
-          "success",
-          `Reacted (${config.facebook.reaction}) to "${config.facebook.targetText}".`,
-        );
         if (exitAfterReact && resolveReactionDone) {
           resolveReactionDone();
           resolveReactionDone = null;
         }
       } else {
-        await notify("error", "Matched a post but failed to react.");
+        logger.warn(
+          { postId: post.id },
+          "Matched a message but could not react — still listening for the next one",
+        );
       }
     };
 
@@ -153,26 +225,15 @@ export async function runSession(exitAfterReact = false): Promise<void> {
     await attachObserver(page, handlePost);
     stopKeepAlive = startKeepAlive(page, config.browser.keepAliveIntervalMin);
 
-    const stopHourMs = msUntilLocalHour(config.schedule.stopHour, "tomorrow");
-    const { maxSessionMin } = config.schedule;
-    const waitMs =
-      maxSessionMin === null
-        ? stopHourMs
-        : Math.min(stopHourMs, maxSessionMin * 60_000);
+    const waitMs = Math.max(0, deadline - Date.now());
     logger.info(
-      {
-        stopHour: config.schedule.stopHour,
-        maxSessionMin,
-        waitMinutes: Math.round(waitMs / 60000),
-        boundedBy: waitMs < stopHourMs ? "MAX_SESSION_MIN" : "STOP_HOUR",
-      },
-      "Session running",
+      { listenSeconds: Math.round(waitMs / 1000) },
+      exitAfterReact
+        ? "Listening until a reaction succeeds or the window closes"
+        : "Listening until the window closes",
     );
 
     if (exitAfterReact) {
-      logger.info(
-        "EXIT_AFTER_REACT enabled — session will close after the first successful reaction",
-      );
       let stopTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
@@ -192,8 +253,10 @@ export async function runSession(exitAfterReact = false): Promise<void> {
       await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
     }
   } catch (err) {
-    logger.error({ err }, "Session error");
-    await notify("error", `Session error: ${(err as Error).message}`);
+    logger.error(
+      { err },
+      `Session error: ${(err as Error).message.split("\n")[0]}`,
+    );
   } finally {
     stopKeepAlive?.();
     logger.info("Stopping — closing browser");
@@ -210,6 +273,5 @@ export async function runSession(exitAfterReact = false): Promise<void> {
       );
     }
     await context.close().catch(() => undefined);
-    await notify("info", "Bot session stopped.");
   }
 }

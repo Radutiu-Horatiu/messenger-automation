@@ -12,7 +12,6 @@
 import fs from "node:fs/promises";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
-import { notify } from "../services/discord.js";
 import { launchContext } from "./browser.js";
 import { detectLoggedOut } from "./group.js";
 
@@ -80,7 +79,6 @@ async function main(): Promise<void> {
       logger.error(
         "Fix: run `npm run login`, then paste data/storageState.b64.txt into FB_STORAGE_STATE_B64 and redeploy.",
       );
-      await notify("error", `Facebook session is INVALID — ${reason}.`);
       process.exitCode = 1;
       return;
     }

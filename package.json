@@ -15,6 +15,7 @@
     "login": "tsx src/facebook/login.ts",
     "check:session": "tsx src/facebook/check-session.ts",
     "save:session": "tsx src/facebook/save-session.ts",
+    "debug:react": "tsx src/debug-react.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

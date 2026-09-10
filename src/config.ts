@@ -142,6 +142,8 @@ export const config = {
     reactToExisting: boolean("REACT_TO_EXISTING", false),
     // Forward the browser console + diagnostics into the Node logs.
     verbose: boolean("VERBOSE", false),
+    // Screenshot every reaction step into DATA_DIR/debug/.
+    screenshots: boolean("DEBUG_SCREENSHOTS", false),
   },
 } as const;
 

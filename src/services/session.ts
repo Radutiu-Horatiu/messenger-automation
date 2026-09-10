@@ -138,6 +138,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
 
   const context = await launchContext();
   let stopKeepAlive: (() => void) | null = null;
+  let stopObserver: (() => void) | null = null;
   // Set once we have confirmed a logged-in page; gates the cookie write-back.
   let sessionHealthy = false;
 
@@ -222,7 +223,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
       }, 800);
     };
 
-    await attachObserver(page, handlePost);
+    stopObserver = await attachObserver(page, handlePost);
     stopKeepAlive = startKeepAlive(page, config.browser.keepAliveIntervalMin);
 
     const waitMs = Math.max(0, deadline - Date.now());
@@ -259,6 +260,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
     );
   } finally {
     stopKeepAlive?.();
+    stopObserver?.();
     logger.info("Stopping — closing browser");
     // Only persist cookies from a session we know was logged in. If openGroup
     // threw because Facebook bounced us to a login/checkpoint page, the

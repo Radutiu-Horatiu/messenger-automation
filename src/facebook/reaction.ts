@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { type Page, type Locator } from "playwright";
 import { config, type ReactionName } from "../config.js";
@@ -98,13 +99,71 @@ function locateArticle(page: Page, text: string): Locator {
 }
 
 /**
+ * Save a screenshot of a reaction step when DEBUG_SCREENSHOTS is on, so a
+ * run can be replayed frame by frame from data/debug/.
+ */
+async function debugShot(page: Page, step: string): Promise<void> {
+  if (!config.debug.screenshots) return;
+  try {
+    const dir = path.join(config.storage.dataDir, "debug");
+    await fs.mkdir(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = path.join(dir, `${stamp}-${step}.png`);
+    await page.screenshot({ path: file });
+    logger.debug({ file }, "Saved debug screenshot");
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
+ * Log what the reaction flow could see when it gave up: how many bubbles
+ * match the text, which menu buttons and emoji items are on screen. Read with
+ * the step logs, it pins down which step's selector no longer fits the page.
+ */
+async function logReactionContext(page: Page, snippet: string): Promise<void> {
+  try {
+    const main = page.locator('[role="main"]');
+    const bubblesSpan = await main
+      .locator('span[dir="auto"]', { hasText: snippet })
+      .filter({ visible: true })
+      .count();
+    const bubblesAny = await main
+      .locator('[dir="auto"]', { hasText: snippet })
+      .filter({ visible: true })
+      .count();
+    const menuButtons = await page
+      .locator('[aria-haspopup="menu"]')
+      .filter({ visible: true })
+      .evaluateAll((els) =>
+        els.slice(0, 15).map((e) => e.getAttribute("aria-label")),
+      );
+    const emojiItems = await page
+      .locator('[role="menuitemradio"]')
+      .filter({ visible: true })
+      .evaluateAll((els) =>
+        els.map((e) => e.querySelector("img")?.getAttribute("alt") ?? e.textContent),
+      );
+    logger.warn(
+      { snippet, bubblesSpan, bubblesAny, menuButtons, emojiItems },
+      "What the reaction flow could see when it failed",
+    );
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
  * React to a Messenger message: hover the message row to reveal its action
  * toolbar, click the "React" button, then pick the emoji in the popup.
+ * Each step is logged, so a failure names the step it stopped at.
  */
 async function reactMessenger(page: Page, text: string): Promise<boolean> {
   const reaction = config.facebook.reaction;
   const { emoji } = MESSENGER_REACTION[reaction];
   const snippet = snippetOf(text);
+  const step = (n: number, what: string, extra: Record<string, unknown> = {}): void =>
+    logger.info(extra, `React step ${n}/5: ${what}`);
 
   try {
     // Scope to the OPEN conversation pane so we never touch the left-hand
@@ -112,12 +171,13 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
     // span; a separate HIDDEN accessibility span also contains the text, so
     // we must explicitly pick the visible one to hover.
     const main = page.locator('[role="main"]');
-    const bubble = main
+    const bubbles = main
       .locator('span[dir="auto"]', { hasText: snippet })
-      .filter({ visible: true })
-      .last();
+      .filter({ visible: true });
+    const bubble = bubbles.last();
     await bubble.waitFor({ state: "visible", timeout: 5_000 });
     await bubble.scrollIntoViewIfNeeded();
+    step(1, "found the message bubble", { snippet, matches: await bubbles.count() });
 
     // Clear any modal (consent, promo, e2ee nag) BEFORE interacting. These
     // show up far more often on server IPs and swallow every real click.
@@ -130,17 +190,23 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
     await bubble.dispatchEvent("mouseenter");
     await bubble.dispatchEvent("mouseover", { bubbles: true });
     await page.waitForTimeout(400);
+    step(2, "hovered the message to reveal its toolbar");
+    await debugShot(page, "2-hovered");
 
     // React trigger: div[role="button"] with aria-haspopup="menu" whose label
     // contains "emoji" (RO: "Reacţionează cu un emoji"). It lives inside an
     // aria-hidden="true" toolbar, so getByRole would skip it — use a CSS
     // attribute locator instead. The composer's emoji picker ("Alege un
     // emoji") uses haspopup="dialog", so requiring haspopup="menu" avoids it.
-    const reactTrigger = page
+    const triggers = page
       .locator('[aria-haspopup="menu"][aria-label*="emoji" i]')
-      .filter({ visible: true })
-      .first();
+      .filter({ visible: true });
+    const reactTrigger = triggers.first();
     await reactTrigger.waitFor({ state: "visible", timeout: 4_000 });
+    step(3, "found the react button", {
+      candidates: await triggers.count(),
+      label: await reactTrigger.getAttribute("aria-label"),
+    });
     await clickPastOverlays(page, reactTrigger);
 
     // Emoji menu: each reaction is a role="menuitemradio" wrapping
@@ -153,6 +219,8 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
       .first();
 
     await emojiItem.waitFor({ state: "visible", timeout: 4_000 });
+    step(4, "opened the reaction menu");
+    await debugShot(page, "4-menu-open");
     try {
       await emojiItem.click({ timeout: 4_000 });
     } catch {
@@ -160,13 +228,17 @@ async function reactMessenger(page: Page, text: string): Promise<boolean> {
       // (it would close the menu); dispatch the click directly instead.
       await emojiItem.dispatchEvent("click");
     }
+    step(5, `clicked ${emoji}`);
+    await page.waitForTimeout(800);
+    await debugShot(page, "5-reacted");
     logger.info({ reaction, emoji }, "Applied Messenger reaction");
     return true;
   } catch (err) {
     logger.error(
-      { err: (err as Error).message, reaction },
+      { err: (err as Error).message.split("\n")[0], reaction },
       "Failed to apply Messenger reaction — selectors may need tuning",
     );
+    await logReactionContext(page, snippet);
     await captureFailureDiagnostics(page);
     return false;
   }

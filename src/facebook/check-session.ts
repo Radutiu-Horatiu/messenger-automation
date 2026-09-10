@@ -12,11 +12,8 @@
 import fs from "node:fs/promises";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
-import { launchContext } from "./browser.js";
+import { LOGIN_COOKIES, launchContext } from "./browser.js";
 import { detectLoggedOut } from "./group.js";
-
-/** Cookies that actually carry the login. Everything else is noise. */
-const AUTH_COOKIES = ["c_user", "xs"];
 
 interface StoredCookie {
   name: string;
@@ -39,7 +36,7 @@ async function reportCookieExpiry(): Promise<void> {
   const state = JSON.parse(raw) as { cookies?: StoredCookie[] };
   const now = Date.now() / 1000;
 
-  for (const name of AUTH_COOKIES) {
+  for (const name of LOGIN_COOKIES) {
     const cookie = state.cookies?.find((c) => c.name === name);
     if (!cookie) {
       logger.warn({ cookie: name }, "Auth cookie missing from storageState.json");

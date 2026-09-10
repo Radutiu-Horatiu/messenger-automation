@@ -1,38 +1,34 @@
 /**
- * ONE-TIME LOCAL LOGIN HELPER
- * ---------------------------
- * Run this locally (never on the server) to log in to Facebook by hand
- * and export the session cookies to STORAGE_STATE_PATH.
+ * LOCAL LOGIN HELPER
+ * ------------------
+ * Run this on your own machine (never on the host) to log in to Facebook by
+ * hand and export the session.
  *
  *   npm run login
  *
- * A visible Chromium window opens. Log in manually (handle any 2FA),
- * make sure you land on your normal feed, then press ENTER in the
- * terminal. The storage state is written to disk.
- *
- * Upload the resulting storageState.json to the Railway persistent
- * volume (/data). Commit NOTHING.
+ * A visible Chromium window opens. Log in however Facebook asks — "Continue as
+ * <you>", password, 2FA. The helper watches for the login cookies and saves
+ * the session by itself the moment you are genuinely in; there is nothing to
+ * press. It writes storageState.json plus data/storageState.b64.txt — paste
+ * the latter into FB_STORAGE_STATE_B64 on the host. Commit NOTHING.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import readline from "node:readline";
 import { chromium } from "playwright";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
-import { USER_AGENT } from "./browser.js";
+import { LOGIN_COOKIES, USER_AGENT } from "./browser.js";
+import { detectLoggedOut } from "./group.js";
 
-function waitForEnter(prompt: string): Promise<void> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  return new Promise((resolve) => {
-    rl.question(prompt, () => {
-      rl.close();
-      resolve();
-    });
-  });
-}
+/** How long to wait for you to finish logging in before giving up. */
+const LOGIN_TIMEOUT_MS = 10 * 60_000;
+const POLL_MS = 2_000;
+/**
+ * Consecutive logged-in polls required before saving. Facebook sets its
+ * cookies across a couple of redirects right after login; one clean poll can
+ * land mid-flight.
+ */
+const STABLE_POLLS = 2;
 
 async function main(): Promise<void> {
   logger.info("Launching Chromium for manual login...");
@@ -42,7 +38,7 @@ async function main(): Promise<void> {
   });
   await fs.mkdir(config.storage.profileDir, { recursive: true });
 
-  // Use a persistent profile so the same browser state is reused on Railway.
+  // Same persistent profile the bot uses, so the device looks the same.
   const context = await chromium.launchPersistentContext(
     config.storage.profileDir,
     {
@@ -54,40 +50,71 @@ async function main(): Promise<void> {
       args: ["--disable-blink-features=AutomationControlled"],
     },
   );
+  let closed = false;
+  context.on("close", () => {
+    closed = true;
+  });
 
-  const page = await context.newPage();
-
+  const page = context.pages()[0] ?? (await context.newPage());
   await page.goto("https://www.facebook.com/login", {
     waitUntil: "domcontentloaded",
   });
 
   logger.info(
-    "A browser window is open. Log in to Facebook manually (including 2FA).",
+    "Log in to Facebook in the browser window — password, 2FA, whatever it asks. The session saves itself once you are in; there is nothing to press.",
   );
 
-  await waitForEnter(
-    "\n>>> When you are fully logged in and see your feed, press ENTER here to save the session...\n",
-  );
+  // Previously this waited for ENTER in the terminal, and closing the window
+  // instead silently skipped the export. Watching for the login itself leaves
+  // no step to miss.
+  const started = Date.now();
+  let stable = 0;
+  while (stable < STABLE_POLLS) {
+    if (closed || !context.pages()[0]) {
+      logger.error("The browser was closed before the login finished — nothing was saved.");
+      process.exitCode = 1;
+      return;
+    }
+    if (Date.now() - started > LOGIN_TIMEOUT_MS) {
+      logger.error("Timed out waiting for the login to finish — nothing was saved.");
+      await context.close().catch(() => undefined);
+      process.exitCode = 1;
+      return;
+    }
+    const reason = await detectLoggedOut(context.pages()[0]).catch(
+      () => "page unavailable",
+    );
+    stable = reason === null ? stable + 1 : 0;
+    if (stable < STABLE_POLLS) {
+      await new Promise<void>((resolve) => setTimeout(resolve, POLL_MS));
+    }
+  }
 
-  await context.storageState({ path: config.storage.storageStatePath });
+  const state = await context.storageState();
+  await context.close();
 
-  // Also emit a base64 blob. Pasting one variable into the host beats getting
-  // a file onto a persistent volume, and this is a step you have to repeat
-  // every time Facebook invalidates the session.
-  const json = await fs.readFile(config.storage.storageStatePath, "utf8");
+  // Never hand over an export that cannot log in.
+  const names = new Set(state.cookies.map((c) => c.name));
+  const missing = LOGIN_COOKIES.filter((name) => !names.has(name));
+  if (missing.length > 0) {
+    logger.error({ missing }, "The export has no login cookies — nothing was saved.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const json = JSON.stringify(state, null, 2);
+  await fs.writeFile(config.storage.storageStatePath, json, "utf8");
   const b64Path = path.join(config.storage.dataDir, "storageState.b64.txt");
   await fs.writeFile(b64Path, Buffer.from(json, "utf8").toString("base64"), "utf8");
 
   logger.info(
-    { path: config.storage.storageStatePath, profileDir: config.storage.profileDir },
-    "Storage state saved.",
+    { path: config.storage.storageStatePath, cookies: state.cookies.length },
+    "Logged in — session saved.",
   );
   logger.info(
     { b64Path },
     "Copy the contents of this file into the FB_STORAGE_STATE_B64 variable on your host, then redeploy.",
   );
-
-  await context.close();
 }
 
 main().catch((err) => {

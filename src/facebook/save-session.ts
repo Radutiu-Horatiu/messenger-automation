@@ -7,9 +7,8 @@
  *
  *   npm run save:session
  *
- * Use it when `npm run login` left you logged in but the export never ran
- * (closing the browser window skips it — the save happens when you press ENTER
- * in the terminal), or any time you want a fresh blob without logging in again.
+ * Use it any time you want a fresh blob from a profile that is already
+ * logged in, without logging in again.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -80,7 +79,7 @@ async function main(): Promise<void> {
     if (reason) {
       logger.error({ reason }, "The browser profile is NOT logged in");
       logger.error(
-        "Run `npm run login` first — and press ENTER in the terminal when you are done, do not just close the window.",
+        "Run `npm run login` first — it saves the session by itself once you are logged in.",
       );
       process.exitCode = 1;
       return;

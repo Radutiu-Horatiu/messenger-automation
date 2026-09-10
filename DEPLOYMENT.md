@@ -139,6 +139,7 @@ title and any visible dialog. What to do about each:
 | Reason in the log | Meaning | Fix |
 | --- | --- | --- |
 | `redirected to the login page` | Facebook no longer accepts the cookies | Re-login (below) |
+| `no login cookies (c_user/xs)` | The blob or profile holds no login at all | Re-login (below) |
 | `asking for the account password` | Account remembered, session not trusted | Re-login (below) |
 | `hit a security checkpoint` | Facebook wants to confirm it is you | Approve the "was this you?" prompt on your phone or desktop — the next retry picks it up |
 | `Timeout … exceeded` | Facebook was slow to load | Nothing; the retries absorb it |
@@ -154,18 +155,22 @@ credentials — never commit them, and treat the base64 blob below as a password
 
 ### Re-login (when the session dies)
 
-1. `npm run login` — a browser opens; log in, tick **Remember me**, clear any
-   2FA, and land on your normal feed. Then **press ENTER in the terminal**.
-   Closing the browser window instead skips the export: you end up logged in
-   inside `data/facebook-profile/` while `storageState.json` still holds the
-   old session, which looks fine locally and fails on the host.
-2. `npm run save:session` — exports whatever the profile is holding, checks the
-   result authenticates in a clean browser with no profile behind it, and only
-   then replaces `storageState.json` and writes `data/storageState.b64.txt`.
-   Run this on its own if you hit the trap in step 1; it recovers the session
-   without logging in again.
+1. `npm run login` — a browser opens; log in however Facebook asks
+   ("Continue as…", password, 2FA). It watches for the login cookies and saves
+   by itself the moment you are genuinely in — there is nothing to press, and
+   it refuses to save an export that lacks them.
+2. `npm run check:session` — should say `SESSION VALID`.
 3. Copy the whole line from `data/storageState.b64.txt` into the
    **`FB_STORAGE_STATE_B64`** variable on Railway, then redeploy.
+
+`npm run save:session` re-exports from an already-logged-in profile, verified
+in a clean browser first, if you ever need a fresh blob without logging in.
+
+**What "logged in" means here.** Only `c_user` and `xs` carry a login. The
+others Facebook sets (`datr`, `sb`, `dbln`, …) just identify the device, and with
+those alone Facebook shows a "Continue as <you>" page at the plain root URL —
+no redirect, no password box — that looks logged in and is not. Every check
+in this project requires `c_user` and `xs`.
 
 The app writes that blob to `storageState.json` on boot whenever the variable
 differs from the one it last imported, so you never have to get a file onto the

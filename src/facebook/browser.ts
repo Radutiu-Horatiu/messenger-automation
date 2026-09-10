@@ -20,11 +20,21 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 /**
- * Load cookies + origins from the exported storageState.json into a
- * persistent context. launchPersistentContext does not accept a
- * storageState option, so we inject cookies manually. The persistent
- * profile then keeps the session warm across redeployments.
+ * The cookies that actually carry a Facebook login. Everything else Facebook
+ * sets (datr, sb, dbln, wd, dpr…) only identifies the device — and a device
+ * cookie alone is enough for Facebook to render a "Continue as <you>" page at
+ * the root URL that looks logged in but is not.
  */
+export const LOGIN_COOKIES = ["c_user", "xs"] as const;
+
+/** True when the context currently holds both login cookies. */
+export async function hasLoginCookies(context: BrowserContext): Promise<boolean> {
+  const names = new Set(
+    (await context.cookies("https://www.facebook.com")).map((c) => c.name),
+  );
+  return LOGIN_COOKIES.every((name) => names.has(name));
+}
+
 /**
  * Materialize storageState.json from FB_STORAGE_STATE_B64 when that variable
  * carries something we have not imported yet.
@@ -35,9 +45,9 @@ async function fileExists(p: string): Promise<boolean> {
  * we import so a value that is merely still-set does not keep overwriting the
  * fresher cookies that healthy runs write back to disk.
  */
-export async function importStorageStateFromEnv(): Promise<void> {
+export async function importStorageStateFromEnv(): Promise<boolean> {
   const b64 = config.storage.storageStateB64;
-  if (!b64) return;
+  if (!b64) return false;
 
   const fingerprint = createHash("sha256").update(b64).digest("hex");
   const sourcePath = config.storage.storageStateSourcePath;
@@ -45,7 +55,7 @@ export async function importStorageStateFromEnv(): Promise<void> {
 
   if (previous.trim() === fingerprint) {
     logger.debug("FB_STORAGE_STATE_B64 already imported — keeping the copy on disk");
-    return;
+    return false;
   }
 
   try {
@@ -57,16 +67,37 @@ export async function importStorageStateFromEnv(): Promise<void> {
       { statePath: config.storage.storageStatePath },
       "Imported a new session from FB_STORAGE_STATE_B64",
     );
+    return true;
   } catch (err) {
     logger.error(
       { err },
       "FB_STORAGE_STATE_B64 is not valid base64-encoded JSON — ignoring it",
     );
+    return false;
   }
 }
 
+/**
+ * Seed the persistent profile from storageState.json — but only when the file
+ * is the better source.
+ *
+ * addCookies overwrites same-named cookies, so injecting unconditionally let a
+ * stale file destroy a live login: log in with `npm run login`, skip the
+ * export, and the very next launch loaded the old, dead xs over the fresh one;
+ * Facebook then rejected it and cleared the login entirely. The profile is
+ * written directly by the browser, so it is never staler than the file — except
+ * right after a new FB_STORAGE_STATE_B64 is imported, which is an explicit
+ * instruction to use those credentials instead.
+ */
 async function applyStorageState(context: BrowserContext): Promise<void> {
-  await importStorageStateFromEnv();
+  const imported = await importStorageStateFromEnv();
+
+  if (!imported && (await hasLoginCookies(context))) {
+    logger.info(
+      "Browser profile already holds a login — using it rather than loading storageState.json over it",
+    );
+    return;
+  }
 
   const statePath = config.storage.storageStatePath;
   if (!(await fileExists(statePath))) {
@@ -84,10 +115,18 @@ async function applyStorageState(context: BrowserContext): Promise<void> {
     };
     if (state.cookies && state.cookies.length > 0) {
       await context.addCookies(state.cookies);
+      const names = new Set(state.cookies.map((c) => c.name));
+      const missing = LOGIN_COOKIES.filter((name) => !names.has(name));
       logger.info(
-        { count: state.cookies.length },
+        { count: state.cookies.length, reason: imported ? "new FB_STORAGE_STATE_B64" : "profile had no login" },
         "Loaded cookies from storageState.json",
       );
+      if (missing.length > 0) {
+        logger.error(
+          { missing },
+          "storageState.json has no login cookies — it cannot log in. Re-run `npm run login` locally and paste the new blob.",
+        );
+      }
     }
   } catch (err) {
     logger.error({ err }, "Failed to apply storage state");

@@ -1,22 +1,33 @@
 import { type BrowserContext, type Page } from "playwright";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
+import { hasLoginCookies } from "./browser.js";
 
 /**
  * Decide whether Facebook is refusing this session, returning a human-readable
- * reason or null when we look logged in.
+ * reason or null when we are genuinely logged in.
  *
- * URL heuristics catch the outright redirects — a logged-out browser is sent
- * to /login/. The password check catches the "we still remember your account,
- * prove it's you" screen, which can render without a tell-tale URL.
+ * The decisive test is positive: the login cookies must be present. The
+ * negative signals alone — login URL, visible password field — missed the
+ * "Continue as <you>" remembered-account page, which Facebook serves at the
+ * plain root URL with neither. That page passed as a live session, so a dead
+ * one was exported, "verified" and shipped to the host.
  */
 export async function detectLoggedOut(page: Page): Promise<string | null> {
   const url = page.url();
   if (url.includes("/login") || url.includes("login.php")) {
     return `redirected to the login page (${url})`;
   }
-  if (url.includes("/checkpoint")) {
+  if (
+    url.includes("/checkpoint") ||
+    url.includes("two_step_verification") ||
+    url.includes("/auth_platform")
+  ) {
     return `hit a security checkpoint (${url})`;
+  }
+
+  if (!(await hasLoginCookies(page.context()))) {
+    return "no login cookies (c_user/xs) — Facebook is showing the logged-out \"Continue as…\" page";
   }
 
   // Facebook's login form names its password field "pass" (checked against

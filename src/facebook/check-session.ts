@@ -74,7 +74,7 @@ async function main(): Promise<void> {
     if (reason) {
       logger.error({ url: page.url(), reason }, "SESSION INVALID");
       logger.error(
-        "Fix: run `npm run login`, then paste data/storageState.b64.txt into FB_STORAGE_STATE_B64 and redeploy.",
+        "Fix: run `npm run login` to log this machine back in. (The host has its own session — see its logs.)",
       );
       process.exitCode = 1;
       return;

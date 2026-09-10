@@ -153,18 +153,34 @@ carries on.
 Session cookies come from a real browser login on your own machine. They are
 credentials — never commit them, and treat the base64 blob below as a password.
 
-### Re-login (when the session dies)
+### One login per place — never share a session
 
-1. `npm run login` — a browser opens; log in however Facebook asks
-   ("Continue as…", password, 2FA). It watches for the login cookies and saves
-   by itself the moment you are genuinely in — there is nothing to press, and
-   it refuses to save an export that lacks them.
-2. `npm run check:session` — should say `SESSION VALID`.
-3. Copy the whole line from `data/storageState.b64.txt` into the
-   **`FB_STORAGE_STATE_B64`** variable on Railway, then redeploy.
+Your machine and the host must each have **their own** Facebook login. Facebook
+treats a single login cookie showing up from two networks at once — your home
+connection and Railway's datacenter — as a stolen cookie and kills the session
+*everywhere*. Exporting your local session to the host and then running locally
+again is exactly how a working setup dies within the hour.
 
-`npm run save:session` re-exports from an already-logged-in profile, verified
-in a clean browser first, if you ever need a fresh blob without logging in.
+| Command | Logs in | Writes | Use for |
+| --- | --- | --- | --- |
+| `npm run login` | this machine's profile | `data/storageState.json` | local runs, `check:session`, `debug:react` |
+| `npm run login:host` | a throwaway profile, deleted afterwards | `data/storageState.b64.txt` | pasting into `FB_STORAGE_STATE_B64` |
+
+`login:host` deletes its profile *without logging out*, so the host session
+exists only in the blob and nothing on your machine can ever touch it. Both
+open a visible window: log in however Facebook asks ("Continue as…", password,
+2FA). They watch for the login cookies and save by themselves the moment you
+are genuinely in — there is nothing to press — and refuse to save an export
+that lacks them.
+
+### Re-login (when a session dies)
+
+- **This machine:** `npm run login`, then `npm run check:session` should say
+  `SESSION VALID`.
+- **The host:** `npm run login:host`, copy the whole line from
+  `data/storageState.b64.txt` into **`FB_STORAGE_STATE_B64`** on Railway, and
+  redeploy. Its run logs are the only place its session health shows up —
+  `check:session` checks this machine's session, not the host's.
 
 **What "logged in" means here.** Only `c_user` and `xs` carry a login. The
 others Facebook sets (`datr`, `sb`, `dbln`, …) just identify the device, and with
@@ -172,14 +188,27 @@ those alone Facebook shows a "Continue as <you>" page at the plain root URL —
 no redirect, no password box — that looks logged in and is not. Every check
 in this project requires `c_user` and `xs`.
 
-The app writes that blob to `storageState.json` on boot whenever the variable
+The host writes the blob to `storageState.json` on boot whenever the variable
 differs from the one it last imported, so you never have to get a file onto the
 volume by hand. Because it fingerprints what it imported, a variable that is
 merely still-set will not overwrite the fresher cookies that healthy runs write
 back — only an actually-new paste wins.
 
 Keeping the volume is still worth it: the Chromium profile there is what makes
-you look like the same device each week.
+the host look like the same device each week.
+
+### Debugging reactions locally
+
+    npm run debug:react -- https://www.facebook.com/messages/t/<test-conversation>
+
+One visible, fully logged session: every message the observer sees and whether
+it matched, an observer heartbeat every 30s, each of the five reaction steps,
+and a screenshot per step in `data/debug/`. Send the test message from another
+device or account once it logs `Listening`.
+
+**Pause the host's cron while you test locally.** Both bots are the same
+Facebook account: if both catch the same `Marti?`, the second click on 👍
+*removes* the like the first one added.
 
 ### Checking them
 

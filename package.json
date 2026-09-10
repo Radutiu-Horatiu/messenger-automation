@@ -13,8 +13,8 @@
     "dev": "tsx src/index.ts",
     "run:once": "tsx src/index.ts --once",
     "login": "tsx src/facebook/login.ts",
+    "login:host": "tsx src/facebook/login.ts --host",
     "check:session": "tsx src/facebook/check-session.ts",
-    "save:session": "tsx src/facebook/save-session.ts",
     "debug:react": "tsx src/debug-react.ts",
     "typecheck": "tsc --noEmit"
   },

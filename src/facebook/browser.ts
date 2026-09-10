@@ -103,7 +103,7 @@ async function applyStorageState(context: BrowserContext): Promise<void> {
   if (!(await fileExists(statePath))) {
     logger.warn(
       { statePath },
-      "No storageState.json found — run `npm run login` locally and set FB_STORAGE_STATE_B64 from data/storageState.b64.txt.",
+      "No session on disk. On your machine: `npm run login`. For the host: `npm run login:host`, then paste data/storageState.b64.txt into FB_STORAGE_STATE_B64.",
     );
     return;
   }
@@ -124,7 +124,7 @@ async function applyStorageState(context: BrowserContext): Promise<void> {
       if (missing.length > 0) {
         logger.error(
           { missing },
-          "storageState.json has no login cookies — it cannot log in. Re-run `npm run login` locally and paste the new blob.",
+          "storageState.json has no login cookies — it cannot log in. On your machine: `npm run login`. For the host: `npm run login:host` and paste the new blob.",
         );
       }
     }

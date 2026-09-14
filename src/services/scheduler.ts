@@ -12,7 +12,11 @@ async function guardedRun(): Promise<void> {
   }
   running = true;
   try {
-    await runSession(config.schedule.exitAfterReact);
+    // Always-on mode cannot signal failure by exiting (the process must stay
+    // up for the next trigger), so the log line is the only record here.
+    const outcome = await runSession(config.schedule.exitAfterReact);
+    if (outcome.ok) logger.info(`Run finished — ${outcome.summary}`);
+    else logger.error(`RUN FAILED — ${outcome.summary}`);
   } finally {
     running = false;
   }

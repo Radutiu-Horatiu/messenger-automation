@@ -28,8 +28,18 @@ async function main(): Promise<void> {
     // Honour START_HOUR so a UTC-only platform cron can still land on the
     // right local hour year-round.
     await waitUntilStartHour();
-    await runSession(true);
-    logger.info("Single session complete — exiting");
+    const outcome = await runSession(true);
+    if (outcome.ok) {
+      logger.info(`Run finished — ${outcome.summary}`);
+    } else {
+      // A non-zero exit is the alert: Railway marks the run Crashed and emails
+      // the project's members. Keep the service's Restart Policy at Never —
+      // any retrying policy turns one failure into a burst of reruns.
+      process.exitCode = 1;
+      logger.error(
+        `RUN FAILED — ${outcome.summary}. Exiting with an error so Railway flags this run and emails you.`,
+      );
+    }
     scheduleForcedExit();
     return;
   }
@@ -47,7 +57,9 @@ async function main(): Promise<void> {
 function scheduleForcedExit(): void {
   const timer = setTimeout(() => {
     logger.warn("Event loop still active after session — forcing exit");
-    process.exit(0);
+    // No argument: keep the exit code the run decided on. process.exit(0)
+    // here would silently turn a failed run into a successful one.
+    process.exit();
   }, 5_000);
   timer.unref();
 }

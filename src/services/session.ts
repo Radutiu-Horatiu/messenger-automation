@@ -121,6 +121,17 @@ async function openGroupUntil(
 }
 
 /**
+ * How a session ended. `ok: false` means something needs your attention — the
+ * session is dead, a matching message could not be reacted to, or the run
+ * crashed. A window that closes because nobody posted is a normal Sunday, not
+ * a failure.
+ */
+export interface SessionOutcome {
+  ok: boolean;
+  summary: string;
+}
+
+/**
  * Run one session:
  *  - launch the persistent browser
  *  - open the conversation, retrying until it opens or time runs out
@@ -128,7 +139,9 @@ async function openGroupUntil(
  *  - keep listening until a reaction succeeds (when exitAfterReact) or the
  *    window closes, then shut down
  */
-export async function runSession(exitAfterReact = false): Promise<void> {
+export async function runSession(
+  exitAfterReact = false,
+): Promise<SessionOutcome> {
   // The window closes at one fixed moment, decided up front, so retries and
   // listening draw on a single budget: however the time gets spent, a run
   // never outlives MAX_SESSION_MIN / STOP_HOUR.
@@ -148,6 +161,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
   let stopObserver: (() => void) | null = null;
   // Set once we have confirmed a logged-in page; gates the cookie write-back.
   let sessionHealthy = false;
+  let result: SessionOutcome = { ok: false, summary: "the session ended unexpectedly" };
 
   try {
     const page = await openGroupUntil(context, deadline);
@@ -155,7 +169,12 @@ export async function runSession(exitAfterReact = false): Promise<void> {
       logger.error(
         "Gave up: the conversation never opened before the session window closed — the attempts above say why",
       );
-      return;
+      result = {
+        ok: false,
+        summary:
+          "the conversation never opened — most likely the Facebook session is dead; run `npm run login:host` and update FB_STORAGE_STATE_B64",
+      };
+      return result;
     }
     sessionHealthy = true;
 
@@ -178,6 +197,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
     // one gets liked, and re-running the bot won't toggle the reaction on/off.
     let reactionQueue = Promise.resolve();
     let matchedCount = 0;
+    let reactedCount = 0;
     let pendingPost: DetectedPost | null = null;
     let reactionTimeout: ReturnType<typeof setTimeout> | null = null;
     let resolveReactionDone: (() => void) | null = null;
@@ -200,6 +220,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
       if (ok) {
         await markReacted(post.id);
         await saveStorageState(context);
+        reactedCount++;
         logger.info({ postId: post.id }, "Reaction successful");
         if (exitAfterReact && resolveReactionDone) {
           resolveReactionDone();
@@ -271,11 +292,21 @@ export async function runSession(exitAfterReact = false): Promise<void> {
           : `Window closed at ${endsAt} (${budget.boundedBy}) — ${matchedCount} matching message(s) arrived but no reaction succeeded; see the React step lines above`,
       );
     }
+
+    if (reactedCount > 0) {
+      result = { ok: true, summary: `reacted to ${target}` };
+    } else if (matchedCount > 0) {
+      result = {
+        ok: false,
+        summary: `${matchedCount} ${target} message(s) arrived but the reaction failed — see the React step lines above`,
+      };
+    } else {
+      result = { ok: true, summary: `no new ${target} message arrived before ${endsAt}` };
+    }
   } catch (err) {
-    logger.error(
-      { err },
-      `Session error: ${(err as Error).message.split("\n")[0]}`,
-    );
+    const message = (err as Error).message.split("\n")[0];
+    logger.error({ err }, `Session error: ${message}`);
+    result = { ok: false, summary: `session error: ${message}` };
   } finally {
     stopKeepAlive?.();
     stopObserver?.();
@@ -294,4 +325,5 @@ export async function runSession(exitAfterReact = false): Promise<void> {
     }
     await context.close().catch(() => undefined);
   }
+  return result;
 }

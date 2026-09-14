@@ -70,8 +70,9 @@ hour of idling costs almost nothing.
   first successful reaction; `STOP_HOUR` is the give-up deadline if the target
   message never arrives. If a run is somehow still alive at the next scheduled
   trigger, Railway skips that trigger rather than running two at once.
-- **Restart Policy must be `Never`.** The platform default is on-failure ×10,
-  which would rerun a failed Sunday immediately, ten times over.
+- **Restart Policy must be `Never`.** A failed run exits non-zero on purpose
+  (see Alerts below); the platform default, on-failure ×10, would answer that
+  by rerunning the whole Sunday immediately, ten times over.
 - **Keep the volume mounted at `/app/data`.** Volumes persist across cron runs
   and are billed for stored data whether or not the container is running. The
   session cookies, Chromium profile, dedupe DB, and failure screenshots all
@@ -151,6 +152,31 @@ title and any visible dialog. What to do about each:
 A line saying a PIN/password prompt is on screen *but is not Facebook's login
 form* is Messenger's chat-history PIN, not a logout. The run dismisses it and
 carries on.
+
+## Alerts
+
+A run that needs your attention exits with code 1. Railway marks it
+**Crashed** and emails the project's members — no other notification service
+involved. Make sure deployment-crash emails are enabled in your Railway
+notification settings.
+
+| The run ends with | Exit | Email |
+| --- | --- | --- |
+| `Run finished — reacted to "Marti?"` | 0 | no |
+| `Run finished — no new "Marti?" message arrived before 22:00:00` | 0 | no — nobody posted, a normal Sunday |
+| `RUN FAILED — the conversation never opened …` | 1 | **yes** — almost always a dead session: re-login the host |
+| `RUN FAILED — N "Marti?" message(s) arrived but the reaction failed …` | 1 | **yes** — the React step lines say which step broke |
+| `RUN FAILED — session error: …` | 1 | **yes** |
+
+A failed run does not stop next week's: Railway only skips a scheduled run
+while the previous one is still going, and every run exits. The container
+starts `node` directly rather than `npm start`, because npm relaying Railway's
+shutdown signal is a known source of spurious non-zero exits — false crash
+emails on every redeploy.
+
+This only works with Railway's Cron Schedule (`RUN_ONCE=true`). In the
+always-on mode the process has to stay up for the next trigger, so a failure
+is recorded only as a `RUN FAILED` log line.
 
 ## Session cookies
 

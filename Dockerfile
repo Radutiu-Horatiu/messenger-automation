@@ -18,4 +18,8 @@ RUN npm run build
 RUN npx playwright install chromium
 
 ENV NODE_ENV=production
-CMD ["npm", "start"]
+# Run node directly rather than through `npm start`. The exit code is now the
+# alert channel (non-zero = Railway marks the run Crashed and emails you), and
+# npm in the middle is a known source of spurious non-zero exits on Railway
+# when it relays shutdown signals — false alarms on every redeploy.
+CMD ["node", "--enable-source-maps", "dist/index.js"]

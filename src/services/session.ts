@@ -58,15 +58,23 @@ export async function waitUntilStartHour(): Promise<void> {
 }
 
 /**
- * How long a session may run: until STOP_HOUR, or for MAX_SESSION_MIN if that
- * comes first.
+ * How long a session may run — until STOP_HOUR, or for MAX_SESSION_MIN if that
+ * comes first — and which of the two is the limit, for the logs.
  */
-function sessionBudgetMs(): number {
+function sessionBudget(): { ms: number; boundedBy: string } {
   const stopHourMs = msUntilLocalHour(config.schedule.stopHour, "tomorrow");
-  const { maxSessionMin } = config.schedule;
-  return maxSessionMin === null
-    ? stopHourMs
-    : Math.min(stopHourMs, maxSessionMin * 60_000);
+  const { maxSessionMin, stopHour } = config.schedule;
+  if (maxSessionMin !== null && maxSessionMin * 60_000 < stopHourMs) {
+    return { ms: maxSessionMin * 60_000, boundedBy: `MAX_SESSION_MIN=${maxSessionMin}` };
+  }
+  return { ms: stopHourMs, boundedBy: `STOP_HOUR=${stopHour}` };
+}
+
+/** Wall-clock time in the configured zone, e.g. "14:52:07". */
+function localTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString("en-GB", {
+    timeZone: config.schedule.timezone,
+  });
 }
 
 /** First wait after a failed page-open; doubles each time up to the cap. */
@@ -124,16 +132,15 @@ export async function runSession(exitAfterReact = false): Promise<void> {
   // The window closes at one fixed moment, decided up front, so retries and
   // listening draw on a single budget: however the time gets spent, a run
   // never outlives MAX_SESSION_MIN / STOP_HOUR.
-  const deadline = Date.now() + sessionBudgetMs();
+  //
+  // Times and limits go in the message text, not just in fields: Railway's
+  // log view shows only the text, so a window that ended on schedule looked
+  // like the job dying "for some reason".
+  const budget = sessionBudget();
+  const deadline = Date.now() + budget.ms;
+  const endsAt = localTime(deadline);
   logger.info(
-    {
-      endsAt: new Date(deadline).toLocaleTimeString("en-GB", {
-        timeZone: config.schedule.timezone,
-      }),
-      stopHour: config.schedule.stopHour,
-      maxSessionMin: config.schedule.maxSessionMin,
-    },
-    "Session starting",
+    `Session starting — window closes at ${endsAt} (${budget.boundedBy})`,
   );
 
   const context = await launchContext();
@@ -170,6 +177,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
     // This way if several "marti?" messages arrive quickly, only the last
     // one gets liked, and re-running the bot won't toggle the reaction on/off.
     let reactionQueue = Promise.resolve();
+    let matchedCount = 0;
     let pendingPost: DetectedPost | null = null;
     let reactionTimeout: ReturnType<typeof setTimeout> | null = null;
     let resolveReactionDone: (() => void) | null = null;
@@ -212,6 +220,7 @@ export async function runSession(exitAfterReact = false): Promise<void> {
         "Message received",
       );
       if (!matched) return;
+      matchedCount++;
 
       // Always keep the latest match; reset the timer on every new one.
       pendingPost = post;
@@ -227,21 +236,22 @@ export async function runSession(exitAfterReact = false): Promise<void> {
     stopKeepAlive = startKeepAlive(page, config.browser.keepAliveIntervalMin);
 
     const waitMs = Math.max(0, deadline - Date.now());
+    const target = `"${config.facebook.targetText}"`;
     logger.info(
-      { listenSeconds: Math.round(waitMs / 1000) },
       exitAfterReact
-        ? "Listening until a reaction succeeds or the window closes"
-        : "Listening until the window closes",
+        ? `Listening for a new ${target} message until ${endsAt} — a reaction ends it sooner`
+        : `Listening for new ${target} messages until ${endsAt}`,
     );
 
+    let outcome: "reacted" | "window-closed" = "window-closed";
     if (exitAfterReact) {
       let stopTimer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          new Promise<void>((resolve) => {
-            stopTimer = setTimeout(resolve, waitMs);
+        outcome = await Promise.race([
+          new Promise<"window-closed">((resolve) => {
+            stopTimer = setTimeout(() => resolve("window-closed"), waitMs);
           }),
-          reactionDone,
+          reactionDone.then(() => "reacted" as const),
         ]);
       } finally {
         // The losing side of the race leaves a pending timer worth up to a
@@ -252,6 +262,14 @@ export async function runSession(exitAfterReact = false): Promise<void> {
       }
     } else {
       await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    }
+
+    if (outcome === "window-closed") {
+      logger.info(
+        matchedCount === 0
+          ? `Window closed at ${endsAt} (${budget.boundedBy}) — no new ${target} message arrived while listening`
+          : `Window closed at ${endsAt} (${budget.boundedBy}) — ${matchedCount} matching message(s) arrived but no reaction succeeded; see the React step lines above`,
+      );
     }
   } catch (err) {
     logger.error(

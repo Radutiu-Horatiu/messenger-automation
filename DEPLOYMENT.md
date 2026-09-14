@@ -92,36 +92,40 @@ Service settings:
 | --- | --- | --- |
 | `FB_GROUP_URL` | *your test conversation* | |
 | `RUN_ONCE` | `true` | **required** — without it the process never exits |
-| `MAX_SESSION_MIN` | `3` | **required** — see below |
+| `MAX_SESSION_MIN` | `15` | **required** — see below |
 | `START_HOUR` | *unset* | **required** — see below |
 | `EXIT_AFTER_REACT` | `true` | exit as soon as it reacts |
 | `START_CRON` | *unset* | Railway drives the schedule now |
 | `REACT_TO_EXISTING` | `false` | only react to messages sent *during* a window |
 | `LOG_LEVEL` | `debug` | |
-| `VERBOSE` | `true` | forwards the in-page observer diagnostics |
+| `VERBOSE` | *unset* | the observer's own lines come through without it; this only adds page noise |
 
 Two settings are load-bearing and easy to get wrong:
 
-- **`MAX_SESSION_MIN=3`.** A run that finds no target message would otherwise
-  stay open until `STOP_HOUR`, and Railway skips any trigger that arrives while
-  the previous run is alive — so you would get one run and then silence. Three
-  minutes of watching plus ~30-60s of container and browser startup fits inside
-  the 5-minute window with room to spare.
+- **`MAX_SESSION_MIN=15`.** Without a cap, a run that finds no target message
+  stays open until `STOP_HOUR` and you get one run per day. Railway skips any
+  trigger that fires while a run is still alive, so a cap longer than the cron
+  interval is harmless — the in-between triggers show as skipped and the next
+  run starts after the current one ends. Make the cap long enough to send a
+  message comfortably: a 3-minute cap left under three minutes of actual
+  listening once startup was paid for, easy to miss by the time the log line
+  showed up.
 - **`START_HOUR` must be unset.** If it is left at `10`, every run started
   before 10:00 local sleeps until 10:00 instead of watching, and holds the slot
   while it does. It exists only to correct for UTC drift on the weekly schedule.
 
-Post `Marti?` in the test conversation *after* a run has started; messages
-already on screen when the observer attaches are marked seen and ignored. Watch
-**Cron Runs** in Railway for the trigger history, and the deploy logs for
-`Target message detected` / `Applied Messenger reaction`.
+Wait for `Listening for a new "Marti?" message until HH:MM:SS`, then post
+`Marti?` in the test conversation before that time; messages already on screen
+when the observer attaches are marked seen and ignored. A run always ends with a
+line saying why: `Applied Messenger reaction`, or `Window closed at … — no new
+"Marti?" message arrived while listening` if nothing matching showed up.
 
 ### Switching back to production
 
 - **Cron Schedule** -> `0 7 * * 0`
 - `FB_GROUP_URL` -> the real conversation
 - `START_HOUR` -> `10`
-- remove `MAX_SESSION_MIN`, `VERBOSE`, and `LOG_LEVEL=debug`
+- remove `MAX_SESSION_MIN` and `LOG_LEVEL=debug`
 - leave `RUN_ONCE=true` and `EXIT_AFTER_REACT=true` as they are
 
 ## Reading a run
